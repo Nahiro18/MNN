@@ -51,6 +51,12 @@ class ModelMarketViewModel(application: Application) : AndroidViewModel(applicat
     private val _loadError = MutableLiveData<String?>()
     val loadError: LiveData<String?> = _loadError
 
+    // Community MNN models discovered on HuggingFace (any org, not only taobao-mnn),
+    // merged into search results so users can find and add every MNN model available.
+    private var hfSearchResults: List<ModelMarketItemWrapper> = emptyList()
+    private var hfSearchJob: kotlinx.coroutines.Job? = null
+    private var hfSearchSeq = 0
+
     init {
         loadModels()
         downloadManager.addListener(this)
@@ -119,8 +125,9 @@ class ModelMarketViewModel(application: Application) : AndroidViewModel(applicat
         }
 
         // Apply search query filter
-        if (currentFilterState.searchQuery.isNotEmpty()) {
-            val searchLower = currentFilterState.searchQuery.lowercase(Locale.getDefault())
+        val searchQuery = currentFilterState.searchQuery.trim()
+        if (searchQuery.isNotEmpty()) {
+            val searchLower = searchQuery.lowercase(Locale.getDefault())
             filteredList = filteredList.filter { wrapper ->
                 val modelMarketItem = wrapper.modelMarketItem
                 // Search in model name, description, tags, etc.
@@ -128,9 +135,50 @@ class ModelMarketViewModel(application: Application) : AndroidViewModel(applicat
                 modelMarketItem.description?.lowercase(Locale.getDefault())?.contains(searchLower) == true ||
                 modelMarketItem.tags.any { it.lowercase(Locale.getDefault()).contains(searchLower) }
             }
+
+            // Merge community MNN models found on HuggingFace (any org, not only
+            // taobao-mnn/Alibaba), so the app search shows every MNN model
+            // available on the Hub.
+            triggerHuggingFaceSearch(searchQuery)
+            val localNames = allModels.map {
+                it.modelMarketItem.currentRepoPath.ifEmpty { it.modelMarketItem.modelName }
+                    .lowercase(Locale.getDefault())
+            }.toHashSet()
+            val extra = hfSearchResults.filter {
+                !localNames.contains(
+                    it.modelMarketItem.currentRepoPath.ifEmpty { it.modelMarketItem.modelName }
+                        .lowercase(Locale.getDefault())
+                ) &&
+                    (currentFilterState.source == null ||
+                        it.modelMarketItem.sources.containsKey(currentFilterState.source))
+            }
+            filteredList = filteredList + extra
+        } else {
+            hfSearchJob?.cancel()
+            hfSearchResults = emptyList()
         }
 
         _models.postValue(filteredList)
+    }
+
+    private fun triggerHuggingFaceSearch(query: String) {
+        if (hfSearchJob?.isActive == true) return
+        val seq = ++hfSearchSeq
+        hfSearchJob = viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val items = HuggingFaceMnnSearcher.searchMnnModels(query)
+                if (seq != hfSearchSeq) return@launch
+                val wrappers = items.map { item ->
+                    val downloadInfo = downloadManager.getDownloadInfo(item.modelId)
+                    ModelMarketItemWrapper(item, downloadInfo)
+                }
+                hfSearchResults = wrappers
+                // Re-apply filters so results appear once they arrive.
+                applyCurrentFilters()
+            } catch (e: Exception) {
+                Log.w(TAG, "HuggingFace community search failed: ${e.message}")
+            }
+        }
     }
 
     fun loadModels() {

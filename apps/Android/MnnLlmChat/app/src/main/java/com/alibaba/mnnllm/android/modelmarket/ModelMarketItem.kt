@@ -21,6 +21,12 @@ data class ModelMarketItem(
     // Convert string tags to Tag objects with i18n support
     val structuredTags: List<Tag>
         get() = tags.map { TagMapper.getTag(it) }
+
+    /** True when this item was discovered live from the HuggingFace community search. */
+    val isHuggingFaceCommunity: Boolean
+        get() = modelId.startsWith("HuggingFace/") &&
+            currentRepoPath.isNotEmpty() &&
+            !currentRepoPath.startsWith("taobao-mnn/")
 }
 
 data class ModelMarketItemWrapper(
