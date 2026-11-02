@@ -64,9 +64,9 @@ jobs:
           fetch-depth: 0
 
       # ------------------------------------------------------------------
-      # 2. Java 17 + Android SDK components (NDK / CMake) installed manually
-      #    (android-actions/setup-android@v3 is avoided: it fails on the
-      #     legacy "tools" package).
+      # Java 17 (Temurin).
+      # NOTE: android-actions/setup-android@v3 is intentionally NOT used
+      # (obsolete; fails on the legacy "tools" package).
       # ------------------------------------------------------------------
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -74,34 +74,54 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Install Android NDK and CMake
-        run: |
-          export ANDROID_SDK_ROOT=/usr/local/lib/android/sdk
-          export ANDROID_HOME=$ANDROID_SDK_ROOT
-          export PATH=$ANDROID_SDK_ROOT/cmdline-tools/latest/bin:$ANDROID_SDK_ROOT/platform-tools:$PATH
-          yes | sdkmanager --licenses > /dev/null || true
-          sdkmanager --install "ndk;27.2.12479018" "cmake;3.22.1"
-          echo "ANDROID_NDK=$ANDROID_SDK_ROOT/ndk/27.2.12479018" >> "$GITHUB_ENV"
-          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT" >> "$GITHUB_ENV"
-          echo "ANDROID_HOME=$ANDROID_SDK_ROOT" >> "$GITHUB_ENV"
-          echo "$ANDROID_SDK_ROOT/cmake/3.22.1/bin" >> "$GITHUB_PATH"
-
       # ------------------------------------------------------------------
-      # 3. Blindaje contra el error de firmado: create ~/.android and
-      #    ~/.config/.android, generate the standard debug.keystore with
-      #    keytool, copy it into .config and fix ownership.
+      # Blindaje contra el error de firmado (Paso Crítico):
+      #   1. Crear manualmente ~/.android y ~/.config/.android con sudo.
+      #   2. Generar el debug.keystore estándar usando keytool.
+      #   3. Copiar el keystore a la carpeta .config y corregir permisos.
+      #
+      # ORDERING: this step runs BEFORE any sdkmanager call, because
+      # `sudo sdkmanager --licenses` creates ~/.android owned by ROOT,
+      # which previously made keytool fail with:
+      #   java.io.FileNotFoundException: /home/runner/.android/debug.keystore
+      #   (Permiso denegado)
+      # Fixes applied:
+      #   * chown ~/.android to the runner user immediately after mkdir.
+      #   * keytool generates into /tmp (can never hit dir permissions),
+      #     then we copy the result into place.
+      #   * rm -f removes any stale root-owned keystore first.
       # ------------------------------------------------------------------
       - name: Prepare debug keystore (signing blindage)
         run: |
           sudo mkdir -p ~/.android ~/.config/.android
+          sudo chown -R "$USER":"$(id -gn)" ~/.android ~/.config/.android
+          chmod 755 ~/.android ~/.config/.android
+          rm -f ~/.android/debug.keystore ~/.config/.android/debug.keystore
           keytool -genkeypair -v \
-            -keystore ~/.android/debug.keystore \
+            -keystore /tmp/debug.keystore \
             -storepass android -alias androiddebugkey \
             -keypass android -keyalg RSA -keysize 2048 -validity 10000 \
             -dname "CN=Android Debug,O=Android,C=US"
-          cp ~/.android/debug.keystore ~/.config/.android/debug.keystore
-          sudo chown -R $USER:$USER ~/.config/.android
+          cp /tmp/debug.keystore ~/.android/debug.keystore
+          cp /tmp/debug.keystore ~/.config/.android/debug.keystore
+          chmod 644 ~/.android/debug.keystore ~/.config/.android/debug.keystore
           ls -l ~/.android ~/.config/.android
+
+      # ------------------------------------------------------------------
+      # Manual SDK component install: licenses + ONLY NDK 27.2.12479018
+      # and CMake 3.22.1, then export ANDROID_NDK / ANDROID_SDK_ROOT.
+      # ------------------------------------------------------------------
+      - name: Install Android NDK and CMake
+        run: |
+          export PATH="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin:$ANDROID_SDK_ROOT/platform-tools:$PATH"
+          yes | sudo sdkmanager --licenses > /dev/null || true
+          sudo sdkmanager --install "ndk;27.2.12479018" "cmake;3.22.1"
+          # Re-assert ownership of ~/.android in case sdkmanager touched it.
+          sudo chown -R "$USER":"$(id -gn)" ~/.android || true
+          echo "ANDROID_NDK=$ANDROID_SDK_ROOT/ndk/27.2.12479018" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT" >> "$GITHUB_ENV"
+          echo "ANDROID_HOME=$ANDROID_SDK_ROOT" >> "$GITHUB_ENV"
+          echo "$ANDROID_SDK_ROOT/cmake/3.22.1/bin" >> "$GITHUB_PATH"
 
       # ------------------------------------------------------------------
       # Cache Gradle dependencies / wrappers to speed up rebuilds.
@@ -117,11 +137,11 @@ jobs:
             gradle-${{ runner.os }}-
 
       # ------------------------------------------------------------------
-      # 4. Build the native MNN engine exactly like apps/Android/MnnLlmChat/build.sh
-      #    All cmake flags are passed on a single line to avoid bash
-      #    line-continuation interpretation problems.
-      #    `make install` places libMNN.so in project/android/build_64/lib,
-      #    the exact path the app's CMakeLists.txt expects.
+      # Build the native MNN engine exactly like apps/Android/MnnLlmChat/build.sh
+      # All cmake flags are passed on a SINGLE LINE to avoid bash
+      # line-continuation interpretation problems.
+      # `make install` places libMNN.so in project/android/build_64/lib,
+      # the exact path the app's CMakeLists.txt expects.
       # ------------------------------------------------------------------
       - name: Build MNN native engine (arm64-v8a)
         run: |
@@ -134,14 +154,14 @@ jobs:
           test -f lib/libMNN.so || { echo "ERROR: libMNN.so not found after make install"; exit 1; }
 
       # ------------------------------------------------------------------
-      # 5. Compile the APK with Gradle (standard flavor, debug build type).
+      # Compile the APK with Gradle (standard flavor, debug build type).
       # ------------------------------------------------------------------
       - name: Assemble APK (assembleStandardDebug)
         working-directory: apps/Android/MnnLlmChat
         run: ./gradlew assembleStandardDebug --no-daemon --stacktrace
 
       # ------------------------------------------------------------------
-      # 6. Upload the APK artifact.
+      # Upload the APK artifact.
       # ------------------------------------------------------------------
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
