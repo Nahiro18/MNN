@@ -63,6 +63,17 @@ object ModelTypeUtils {
         return extraTags.any { it.equals("ThinkingSwitch", ignoreCase = true) }
     }
 
+    fun isThinkingModel(modelId: String): Boolean {
+        val tags = ModelListManager.getModelTags(modelId)
+        val extraTags = ModelListManager.getExtraTags(modelId)
+        return isThinkingModelByTags(tags) || isSupportThinkingSwitchByTags(extraTags)
+    }
+
+    fun isVisualModelByTagsOrId(modelId: String): Boolean {
+        val tags = ModelListManager.getModelTags(modelId)
+        return isVisualModelByTags(tags) || modelId.lowercase(Locale.getDefault()).contains("vl")
+    }
+
     fun isOpenClWarningByExtraTags(extraTags: List<String>): Boolean {
         return extraTags.any {
             it.equals("opencl_warning", ignoreCase = true) ||

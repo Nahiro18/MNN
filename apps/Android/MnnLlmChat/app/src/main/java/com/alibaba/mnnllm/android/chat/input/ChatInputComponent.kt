@@ -137,12 +137,9 @@ class ChatInputComponent(
     }
     
     private fun setupThinkingMode() {
-        val extraTags = ModelListManager.getExtraTags(currentModelId)
-        if (!ModelTypeUtils.isSupportThinkingSwitchByTags(extraTags)) {
-            binding.btnToggleThinking.visibility = View.GONE
-        } else {
-            binding.btnToggleThinking.visibility = View.VISIBLE
-            // Load config off main thread to avoid ANR (file I/O)
+        val supportsThinking = ModelTypeUtils.isThinkingModel(currentModelId)
+        binding.btnToggleThinking.visibility = if (supportsThinking) View.VISIBLE else View.GONE
+        if (supportsThinking) {
             chatActivity.lifecycleScope.launch {
                 val enableThinking = withContext(Dispatchers.IO) {
                     ModelConfig.loadConfig(currentModelId)?.jinja?.context?.enableThinking != false
@@ -151,14 +148,9 @@ class ChatInputComponent(
             }
         }
         binding.btnToggleThinking.setOnClickListener {
-            Log.d(TAG, "handleSendClick isGenerating : ${chatActivity.isLoading}")
-            if (chatActivity.isLoading) {
-                return@setOnClickListener
-            }
+            if (chatActivity.isLoading) return@setOnClickListener
             binding.btnToggleThinking.isSelected = !binding.btnToggleThinking.isSelected
-            onThinkingModeChanged?.apply {
-                this(binding.btnToggleThinking.isSelected)
-            }
+            onThinkingModeChanged?.apply { this(binding.btnToggleThinking.isSelected) }
         }
     }
 
@@ -259,7 +251,9 @@ class ChatInputComponent(
     private fun setupAttachmentPickerModule() {
         imageMore = binding.btPlus
         buttonSwitchVoice = binding.btSwitchAudio
-        if (!ModelTypeUtils.isVisualModel(currentModelId) && !ModelTypeUtils.isAudioModel(currentModelId)) {
+        val supportsVision = ModelTypeUtils.isVisualModelByTagsOrId(currentModelId)
+        val supportsAudio = ModelTypeUtils.isAudioModel(currentModelId)
+        if (!supportsVision && !supportsAudio) {
             imageMore.setVisibility(View.GONE)
             return
         }
@@ -319,8 +313,7 @@ class ChatInputComponent(
             }
 
             override fun onLeaveRecordingMode() {
-                val extraTags = ModelListManager.getExtraTags(currentModelId)
-                if (ModelTypeUtils.isSupportThinkingSwitchByTags(extraTags)) {
+                if (ModelTypeUtils.isThinkingModel(currentModelId)) {
                     binding.btnToggleThinking.visibility = View.VISIBLE
                 }
                 updateAudioOutput()
