@@ -15,6 +15,39 @@ import kotlin.io.path.exists
 
 object HfShaVerifier {
     private const val TAG = "HfShaVerifier"
+
+    /**
+     * Creates a digest that can be updated while the file is downloaded, so the SHA is
+     * computed without a second full read of the file after the transfer finishes.
+     *
+     * Returns null when the ETag is missing or does not use a known hash format.
+     */
+    fun createStreamingDigest(etag: String?, fileSize: Long): MessageDigest? {
+        if (etag.isNullOrEmpty()) return null
+        val expected = etag.trim('"').lowercase(Locale.ROOT)
+        return try {
+            when (expected.length) {
+                40 -> {
+                    if (fileSize <= 0) return null
+                    MessageDigest.getInstance("SHA-1").apply {
+                        update("blob $fileSize\u0000".toByteArray(StandardCharsets.UTF_8))
+                    }
+                }
+                64 -> MessageDigest.getInstance("SHA-256")
+                else -> null
+            }
+        } catch (e: NoSuchAlgorithmException) {
+            null
+        }
+    }
+
+    /** Compares a digest built with [createStreamingDigest] against the ETag. */
+    fun verifyStreamingDigest(etag: String, digest: MessageDigest): Boolean {
+        val expected = etag.trim('"').lowercase(Locale.ROOT)
+        val actual = digest.digest().joinToString("") { "%02x".format(it) }
+        return expected == actual
+    }
+
     fun verify(etag: String, file: Path): Boolean {
         Log.d(TAG, "Verifying $file exists: ${file.exists()}")
         val expected = etag.trim('"').lowercase(Locale.ROOT)

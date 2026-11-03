@@ -294,7 +294,10 @@ class ModelDownloadManager(context: Context) : ModelRepoDownloader.ModelRepoDown
         val intervalElapsed = now - tracker.lastPersistTimeMs >= PERSIST_INTERVAL_MS
         val bytesAdvanced = saved - tracker.lastPersistSavedBytes >= PERSIST_MIN_DELTA_BYTES
         val stageChanged = tracker.lastPersistStage != stage
-        if (force || intervalElapsed || bytesAdvanced || stageChanged) {
+        // Require both time and bytes for regular updates. At 20+ MB/s the old byte-only
+        // threshold triggered a DataStore fsync several times per second and competed with
+        // the file writes; a time gate keeps it to ~1 write every few seconds.
+        if (force || stageChanged || (intervalElapsed && bytesAdvanced)) {
             tracker.lastPersistTimeMs = now
             tracker.lastPersistSavedBytes = saved
             tracker.lastPersistStage = stage
@@ -449,8 +452,8 @@ class ModelDownloadManager(context: Context) : ModelRepoDownloader.ModelRepoDown
 
     companion object {
         const val REQUEST_CODE_POST_NOTIFICATIONS = 1001  // Stub constant for foreground service notifications
-        private const val PERSIST_INTERVAL_MS = 2000L
-        private const val PERSIST_MIN_DELTA_BYTES = 4L * 1024L * 1024L
+        private const val PERSIST_INTERVAL_MS = 5000L
+        private const val PERSIST_MIN_DELTA_BYTES = 8L * 1024L * 1024L
         @Volatile
         private var progressCallbackIntervalMs: Long = 0L
 
