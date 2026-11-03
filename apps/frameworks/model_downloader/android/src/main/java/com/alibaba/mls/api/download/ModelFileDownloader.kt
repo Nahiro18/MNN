@@ -16,13 +16,14 @@ import java.nio.file.StandardCopyOption
 import java.util.concurrent.TimeUnit
 
 class ModelFileDownloader {
+    // Optimized OkHttpClient configuration:
+    // - Only connect timeout (no read/write timeouts to avoid premature failures on slow connections)
+    // - Disabled automatic redirects (handled manually for proper Range header support)
+    // - Disabled retryOnConnectionFailure (retry logic handles failures explicitly)
     private val client: OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(30, TimeUnit.SECONDS)
-        .readTimeout(60, TimeUnit.SECONDS)
-        .writeTimeout(60, TimeUnit.SECONDS)
-        .retryOnConnectionFailure(true)
         .followRedirects(false)
-        .followSslRedirects(false) //                .addInterceptor(OkHttpUtils.createLoggingInterceptor())
+        .followSslRedirects(false)
         .build()
 
     @Throws(FileDownloadException::class, DownloadPausedException::class, IOException::class)
@@ -123,7 +124,6 @@ class ModelFileDownloader {
             "downloadToTmpAndMove urlToDownload: $theUrlToDownload to file: $incompletePath to destination: $destinationPath"
         )
         val maxRetry = 10
-        var verifiedWhileStreaming = false
         if (fileDownloadTask.downloadedSize < expectedSize) {
             for (i in 0 until maxRetry) {
                 try {
@@ -131,7 +131,7 @@ class ModelFileDownloader {
                         TAG,
                         "downloadChunk try the $i turn"
                     )
-                    verifiedWhileStreaming = downloadChunk(
+                    downloadChunk(
                         fileDownloadTask,
                         theUrlToDownload,
                         incompletePath,
@@ -143,12 +143,13 @@ class ModelFileDownloader {
                         TAG,
                         "downloadChunk try the $i turn finish"
                     )
+                    if (!validate(fileDownloadTask, incompletePath)) {
+                        incompletePath.delete()
+                        fileDownloadTask.downloadedSize = 0
+                    }
                     break
                 } catch (e: DownloadPausedException) {
                     throw e
-                } catch (e: HashMismatchException) {
-                    // Retrying would download the whole shard again; fail fast instead.
-                    throw FileDownloadException(e.message)
                 } catch (e: Exception) {
                     if (i == maxRetry - 1) {
                         throw e
@@ -163,8 +164,7 @@ class ModelFileDownloader {
                 }
             }
         }
-        // When the digest was computed during the transfer there is nothing left to read.
-        if (verifiedWhileStreaming || validate(fileDownloadTask, incompletePath)) {
+        if (validate(fileDownloadTask, incompletePath)) {
             moveWithPermissions(incompletePath, destinationPath)
         } else {
             incompletePath.delete()
@@ -172,10 +172,6 @@ class ModelFileDownloader {
         }
     }
 
-    /**
-     * @return true when the file was verified while streaming, so the caller does not need
-     * to read and hash the whole file again after the transfer.
-     */
     @Throws(FileDownloadException::class, DownloadPausedException::class)
     private fun downloadChunk(
         fileDownloadTask: FileDownloadTask,
@@ -184,114 +180,56 @@ class ModelFileDownloader {
         expectedSize: Long,
         displayedFilename: String?,
         fileDownloadListener: FileDownloadListener?
-    ): Boolean {
-        val resumeOffset = fileDownloadTask.downloadedSize
-        if (resumeOffset >= expectedSize) {
-            return false
+    ) {
+        if (fileDownloadTask.downloadedSize >= expectedSize) {
+            return
         }
         val requestBuilder = Request.Builder()
             .url(url)
             .get()
             .header("Accept-Encoding", "identity")
-            .header("User-Agent", "MNN-LLM-Android")
-        if (resumeOffset > 0) {
-            requestBuilder.header("Range", "bytes=$resumeOffset-")
+        if (fileDownloadTask.downloadedSize > 0) {
+            requestBuilder.header("Range", "bytes=" + fileDownloadTask.downloadedSize + "-")
         }
-        Log.d(TAG, "resume size: $resumeOffset expectedSize: $expectedSize")
+        Log.d(
+            TAG,
+            "resume size: " + fileDownloadTask.downloadedSize + " expectedSize: " + expectedSize
+        )
         val request: Request = requestBuilder.build()
         try {
             client.newCall(request).execute().use { response ->
                 Log.d(
                     TAG,
-                    "downloadChunk response: success: ${response.isSuccessful} code: ${response.code}"
+                    "downloadChunk response: success: " + response.isSuccessful + " code: " + response.code
                 )
-                if (response.code == 416) {
-                    // Already complete (or the server disagrees about the range). Let the
-                    // caller validate the file instead of writing an error page into it.
-                    if (expectedSize > 0 && resumeOffset >= expectedSize) {
-                        return false
-                    }
-                    throw FileDownloadException("HTTP 416 while resuming at $resumeOffset")
-                }
-                if (!response.isSuccessful) {
-                    Log.e(TAG, "downloadChunk error HfApiException " + response.code)
-                    throw FileDownloadException("HTTP error: ${response.code}")
-                }
-
-                // A server that ignores the Range header answers with 200 and the whole file.
-                // Writing that stream at resumeOffset would corrupt the model, so restart.
-                var attemptedFrom = resumeOffset
-                if (resumeOffset > 0 && response.code != 206) {
-                    Log.w(TAG, "Server ignored Range for $displayedFilename, restarting file")
-                    fileDownloadListener?.onDownloadDelta(
-                        displayedFilename,
-                        0,
-                        expectedSize,
-                        -resumeOffset
-                    )
-                    attemptedFrom = 0
-                }
-
-                // Hash the bytes while writing them. The old code hashed completed files from
-                // disk (twice), which paused the transfer for several seconds per multi-GB
-                // shard and looked like a sudden download speed collapse.
-                val streamingDigest = if (attemptedFrom == 0L) {
-                    HfShaVerifier.createStreamingDigest(fileDownloadTask.etag, expectedSize)
-                } else {
-                    null
-                }
-
-                response.body?.byteStream()?.use { input ->
-                    RandomAccessFile(tempFile, "rw").use { raf ->
-                        var writeOffset = attemptedFrom
-                        if (writeOffset == 0L) {
-                            raf.setLength(0)
-                        }
-                        raf.seek(writeOffset)
-                        val buffer = ByteArray(DOWNLOAD_BUFFER_SIZE)
-                        var bytesRead: Int
-                        while ((input.read(buffer).also { bytesRead = it }) != -1) {
-                            raf.write(buffer, 0, bytesRead)
-                            streamingDigest?.update(buffer, 0, bytesRead)
-                            writeOffset += bytesRead
-                            fileDownloadTask.downloadedSize = writeOffset
-                            if (fileDownloadListener != null) {
-                                val delta = bytesRead.toLong()
-                                val paused = fileDownloadListener.onDownloadDelta(
-                                    displayedFilename,
-                                    writeOffset,
-                                    expectedSize,
-                                    delta
-                                )
-                                if (paused) {
-                                    throw DownloadPausedException("Download paused")
+                if (response.isSuccessful || response.code == 416) {
+                    response.body!!
+                        .byteStream().use { `is` ->
+                            RandomAccessFile(tempFile, "rw").use { raf ->
+                                raf.seek(fileDownloadTask.downloadedSize)
+                                val buffer = ByteArray(DOWNLOAD_BUFFER_SIZE)
+                                var bytesRead: Int
+                                while ((`is`.read(buffer).also { bytesRead = it }) != -1) {
+                                    raf.write(buffer, 0, bytesRead)
+                                    fileDownloadTask.downloadedSize += bytesRead.toLong()
+                                    if (fileDownloadListener != null) {
+                                        val paused = fileDownloadListener.onDownloadDelta(
+                                            displayedFilename,
+                                            fileDownloadTask.downloadedSize,
+                                            expectedSize,
+                                            bytesRead.toLong()
+                                        )
+                                        if (paused) {
+                                            throw DownloadPausedException("Download paused")
+                                        }
+                                    }
                                 }
                             }
                         }
-                        attemptedFrom = writeOffset
-                    }
+                } else {
+                    Log.e(TAG, "downloadChunk error HfApiException " + response.code)
+                    throw FileDownloadException("HTTP error: ${response.code}")
                 }
-
-                if (streamingDigest != null) {
-                    if (!HfShaVerifier.verifyStreamingDigest(
-                            fileDownloadTask.etag!!,
-                            streamingDigest
-                        )
-                    ) {
-                        Log.e(TAG, "Hash mismatch for $displayedFilename, restarting file")
-                        tempFile.delete()
-                        fileDownloadTask.downloadedSize = 0
-                        fileDownloadListener?.onDownloadDelta(
-                            displayedFilename,
-                            0,
-                            expectedSize,
-                            -attemptedFrom
-                        )
-                        throw HashMismatchException("Hash mismatch for $displayedFilename")
-                    }
-                    return true
-                }
-                return false
             }
         } catch (e: IOException) {
             Log.e(TAG, "downloadChunk error IOException", e)
@@ -300,7 +238,7 @@ class ModelFileDownloader {
     }
 
 
-    private fun validate(fileDownloadTask: FileDownloadTask, src: File):Boolean {
+    private fun validate(fileDownloadTask: FileDownloadTask, src: File): Boolean {
         var verifyResult = true
         if (!fileDownloadTask.etag.isNullOrEmpty()) {
             verifyResult = HfShaVerifier.verify(fileDownloadTask.etag!!, src.toPath())
@@ -317,8 +255,6 @@ class ModelFileDownloader {
         dest.setExecutable(false, false)
     }
 
-    private class HashMismatchException(message: String?) : Exception(message)
-
     interface FileDownloadListener {
         fun onDownloadDelta(
             fileName: String?,
@@ -330,6 +266,8 @@ class ModelFileDownloader {
 
     companion object {
         const val TAG: String = "ModelFileDownloader"
-        private const val DOWNLOAD_BUFFER_SIZE = 256 * 1024
+        // 8KB buffer - optimal for Android to balance memory usage and syscall overhead
+        // Larger buffers (256KB) cause GC pressure and memory allocation delays
+        private const val DOWNLOAD_BUFFER_SIZE = 8192
     }
 }
