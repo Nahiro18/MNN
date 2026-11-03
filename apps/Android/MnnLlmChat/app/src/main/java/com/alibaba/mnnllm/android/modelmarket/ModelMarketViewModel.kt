@@ -397,7 +397,7 @@ class ModelMarketViewModel(application: Application) : AndroidViewModel(applicat
         recordModelTypeIfNeeded(modelId, path)
         mainHandler.post {
             allModels.find { it.modelMarketItem.modelId == modelId }?.let { wrapper ->
-                updateDownloadInfo(modelId, downloadManager.getDownloadInfo(it.modelMarketItem.modelId))
+                updateDownloadInfo(modelId, downloadManager.getDownloadInfo(wrapper.modelMarketItem.modelId))
                 ModelMarketCache.writeMarketConfig(wrapper.modelMarketItem)
             }
             _itemUpdate.value = modelId
