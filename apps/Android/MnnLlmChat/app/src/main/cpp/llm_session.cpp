@@ -312,6 +312,13 @@ const MNN::Transformer::LlmContext * LlmSession::Response(const std::string &pro
         // Prefill only. Stepping decode one token at a time via llm_->generate(1) keeps
         // streaming active without letting the engine mark the session as finished up front.
         llm_->response(multimodal_result.multimodal_prompt, &output_ostream, "<eop>", 0);
+    } else if (multimodal_result.had_multimodal_markers) {
+        // The prompt had media tags but nothing could be decoded. Use the cleaned prompt:
+        // routing through history_ would make the engine retry the unreadable file and
+        // leave the session stuck in INTERNAL_ERROR.
+        MNN_ERROR("Multimodal content could not be decoded, continuing with text only: %s",
+                  multimodal_result.error_message.c_str());
+        llm_->response(multimodal_result.multimodal_prompt, &output_ostream, "<eop>", 0);
     } else {
         MNN_DEBUG("No multimodal content detected, using regular text API");
         llm_->response(history_, &output_ostream, "<eop>", 0);
@@ -511,6 +518,10 @@ const MNN::Transformer::LlmContext * LlmSession::ResponseWithHistory(
         if (!multimodal_result.error_message.empty()) {
             MNN_ERROR("ResponseWithHistory: Multimodal processing errors: %s", multimodal_result.error_message.c_str());
         }
+        llm_->response(multimodal_result.multimodal_prompt, &output_ostream, "<eop>", 0);
+    } else if (multimodal_result.had_multimodal_markers) {
+        MNN_ERROR("ResponseWithHistory: Multimodal content could not be decoded, continuing with text only: %s",
+                  multimodal_result.error_message.c_str());
         llm_->response(multimodal_result.multimodal_prompt, &output_ostream, "<eop>", 0);
     } else {
         MNN_DEBUG("ResponseWithHistory: No multimodal content detected, using regular text API");

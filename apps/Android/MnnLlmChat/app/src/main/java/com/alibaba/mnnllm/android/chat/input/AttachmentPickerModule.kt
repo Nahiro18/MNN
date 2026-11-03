@@ -20,6 +20,7 @@ import androidx.lifecycle.lifecycleScope
 import com.alibaba.mnnllm.android.R
 import com.alibaba.mnnllm.android.chat.ChatActivity
 import com.alibaba.mnnllm.android.utils.FileUtils
+import com.alibaba.mnnllm.android.utils.ImageUtils
 import com.alibaba.mnnllm.android.model.ModelCapabilities
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -227,11 +228,19 @@ class AttachmentPickerModule(
     fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         if (requestCode == REQUEST_CODE_CAPTURE_IMAGE) {
             if (resultCode == Activity.RESULT_OK) {
-                if (imageUri != null) {
-                    val imagePath = imageUri?.path
-                    Log.d("ImagePath", "Image saved to: $imagePath")
-                    imagePreviewAdapter.addImage(imageUri!!)
-                    showImagePreview()
+                val capturedFile = photoFile
+                val capturedUri = imageUri
+                if (capturedFile != null && capturedUri != null) {
+                    Log.d("ImagePath", "Image saved to: ${capturedFile.absolutePath}")
+                    activity.lifecycleScope.launch {
+                        // Give the engine a small JPEG: full-resolution photos can produce
+                        // tens of thousands of vision tokens and make the UI spin forever.
+                        withContext(Dispatchers.IO) {
+                            ImageUtils.compressImageFile(capturedFile)
+                        }
+                        imagePreviewAdapter.addImage(capturedUri)
+                        showImagePreview()
+                    }
                 }
             }
             imageUri = null
@@ -248,26 +257,35 @@ class AttachmentPickerModule(
                 }
 
                 if (uris.isNotEmpty()) {
-                    val processedUris = mutableListOf<Uri>()
-                    for (uri in uris) {
-                        try {
-                            val destImageFile = FileUtils.generateDestImageFilePath(
-                                this.activity,
-                                activity.sessionId!!
-                            )
-                            FileUtils.copyFileUriToPath(
-                                this.activity,
-                                uri,
-                                destImageFile
-                            )
-                            processedUris.add(Uri.fromFile(File(destImageFile)))
-                        } catch (e: IOException) {
-                            Log.e(TAG, "get file failed ", e)
+                    activity.lifecycleScope.launch {
+                        val processedUris = withContext(Dispatchers.IO) {
+                            val copied = mutableListOf<Uri>()
+                            for (uri in uris) {
+                                try {
+                                    val destImageFile = FileUtils.generateDestImageFilePath(
+                                        this@AttachmentPickerModule.activity,
+                                        activity.sessionId!!
+                                    )
+                                    FileUtils.copyFileUriToPath(
+                                        this@AttachmentPickerModule.activity,
+                                        uri,
+                                        destImageFile
+                                    )
+                                    // Gallery items can be HEIC/WebP or multi-megapixel JPEGs.
+                                    // Decoding and re-encoding here guarantees a JPEG the
+                                    // native stb_image decoder understands, bounded in size.
+                                    ImageUtils.compressImageFile(File(destImageFile))
+                                    copied.add(Uri.fromFile(File(destImageFile)))
+                                } catch (e: IOException) {
+                                    Log.e(TAG, "get file failed ", e)
+                                }
+                            }
+                            copied
                         }
-                    }
-                    if (processedUris.isNotEmpty()) {
-                        imagePreviewAdapter.addImages(processedUris)
-                        showImagePreview()
+                        if (processedUris.isNotEmpty()) {
+                            imagePreviewAdapter.addImages(processedUris)
+                            showImagePreview()
+                        }
                     }
                 }
             }

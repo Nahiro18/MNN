@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <regex>
+#include <set>
 #include <utility>
 
 #include <cv/imgcodecs.hpp>
@@ -65,13 +66,37 @@ PromptProcessingResult PromptProcessor::Process(const std::string& prompt_text) 
         return result;
     }
 
-    bool has_images = false;
-    bool has_videos = false;
+    bool has_images = HandleImageTags(prompt_text, result, state);
+    bool has_videos = HandleVideoTags(prompt_text, result, state);
+    (void)has_images;
+    (void)has_videos;
 
-    has_images = HandleImageTags(prompt_text, result, state);
-    has_videos = HandleVideoTags(prompt_text, result, state);
+    result.had_multimodal_markers =
+        prompt_text.find("<img>") != std::string::npos || prompt_text.find("<video>") != std::string::npos;
+    result.has_multimodal = result.had_multimodal_markers && (state.successful_loads > 0);
 
-    result.has_multimodal = (has_images || has_videos) && (state.successful_loads > 0);
+    // Drop any image/video tag that has no decoded part behind it (for example an empty
+    // <img></img> or a tag skipped after hitting the image limit). Leaving such a tag in
+    // the prompt makes Omni try to load it again and fail the whole request.
+    {
+        std::regex media_regex("<(img|video)>([^<]*)</\\1>");
+        std::set<std::string> unresolved;
+        for (std::sregex_iterator it(prompt_text.begin(), prompt_text.end(), media_regex), end;
+             it != end; ++it) {
+            const std::string content = (*it)[2].str();
+            if (result.multimodal_prompt.images.find(content) == result.multimodal_prompt.images.end() &&
+                result.multimodal_prompt.videos.find(content) == result.multimodal_prompt.videos.end()) {
+                unresolved.insert(content);
+            }
+        }
+        for (const auto& content : unresolved) {
+            const std::string escaped = EscapeForRegex(content);
+            state.final_prompt = std::regex_replace(
+                state.final_prompt, std::regex("<img>" + escaped + "</img>"), "");
+            state.final_prompt = std::regex_replace(
+                state.final_prompt, std::regex("<video>" + escaped + "</video>"), "");
+        }
+    }
     result.multimodal_prompt.prompt_template = state.final_prompt;
 
     if (result.has_multimodal) {
@@ -105,16 +130,25 @@ bool PromptProcessor::HandleImageTags(const std::string& prompt_text,
 
             auto image_var = LoadImageFromPath(image_path);
             if (image_var.get() != nullptr) {
-                std::string image_key = "image_" + std::to_string(state.image_index);
+                // The engine looks images up by the text inside <img>...</img>, so the path
+                // must be the key. Using "image_N" here silently made every lookup fail and
+                // forced a second decode of the file inside the engine.
                 MNN::Transformer::PromptImagePart image_part;
                 image_part.image_data = image_var;
-                image_part.width = 0;
-                image_part.height = 0;
-                result.multimodal_prompt.images[image_key] = image_part;
+                auto info = image_var->getInfo();
+                if (info != nullptr && info->dim.size() >= 2) {
+                    image_part.height = info->dim[0];
+                    image_part.width = info->dim[1];
+                } else {
+                    image_part.height = 0;
+                    image_part.width = 0;
+                }
+                result.multimodal_prompt.images[image_path] = image_part;
                 has_images = true;
                 state.image_index++;
                 state.successful_loads++;
-                MNN_DEBUG("Successfully loaded image: %s as %s", image_path.c_str(), image_key.c_str());
+                MNN_DEBUG("Successfully loaded image: %s (%dx%d)",
+                          image_path.c_str(), image_part.width, image_part.height);
             } else {
                 state.failed_loads++;
                 MNN_ERROR("Failed to load image from path: %s", image_path.c_str());

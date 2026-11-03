@@ -9,6 +9,11 @@ namespace mls {
 
 struct PromptProcessingResult {
     bool has_multimodal{false};
+    // True when the prompt contained an <img>/<video> tag, even if every file failed to
+    // decode. Callers must use multimodal_prompt in that case: it is the cleaned prompt
+    // with the unreadable tags removed, which prevents the engine from retrying the same
+    // broken files and putting the session into INTERNAL_ERROR.
+    bool had_multimodal_markers{false};
     MNN::Transformer::MultimodalPrompt multimodal_prompt;
     std::string error_message;
 };
