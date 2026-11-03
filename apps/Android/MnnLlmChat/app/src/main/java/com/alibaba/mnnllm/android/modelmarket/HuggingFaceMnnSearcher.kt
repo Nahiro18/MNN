@@ -70,13 +70,11 @@ object HuggingFaceMnnSearcher {
         }
         val url = buildString {
             append(HF_MODELS_API)
-            append("?pipeline_tag=text-generation")
-            append("&search=mnn")
+            append("?search=mnn")
             append("&full=true")
             append("&sort=downloads")
             append("&direction=-1")
-            append("&limit=")
-            append(RESULT_LIMIT)
+            append("&limit=500")
         }
         val request = Request.Builder()
             .url(url)

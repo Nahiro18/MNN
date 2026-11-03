@@ -78,11 +78,11 @@ class MarketItemHolder(
         // Set basic info
         tvModelTitle.text = modelMarketItem.modelName
         val displayTags = if (modelMarketItem.isHuggingFaceCommunity) {
-            listOf("MNN", "HuggingFace") + TagMapper.getDisplayTagList(modelMarketItem.tags).drop(1)
+            listOf("MNN", modelMarketItem.vendor) + TagMapper.getDisplayTagList(modelMarketItem.tags).drop(1)
         } else {
             TagMapper.getDisplayTagList(modelMarketItem.tags)
         }
-        tagsLayout.setTags(displayTags.take(3)) // Limit to 3 tags to prevent overcrowding
+        tagsLayout.setTags(displayTags.take(3))
         headerSection.setModelName(modelMarketItem.modelName)
         
         // Attach checkbox to voiceDelegate
