@@ -34,7 +34,11 @@ object MmapUtils {
             newModelId = modelId.substring(modelId.indexOf("/") + 1)
         }
         if (newModelId.startsWith("MNN/")) {
-            newModelId = newModelId.replace("MNN/", "taobao-mnn/")
+            // For community models, keep the original organization instead of forcing taobao-mnn/
+            // For backward compatibility, only replace "MNN/" if it's under taobao-mnn or similar official orgs
+            if (modelId.contains("taobao-mnn/")) {
+                newModelId = newModelId.replace("MNN/", "taobao-mnn/")
+            }
         }
         var rootCacheDir =
             ApplicationProvider.get().filesDir.toString() + "/tmps/" + ModelUtils.safeModelId(

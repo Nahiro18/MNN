@@ -188,17 +188,28 @@ object ModelUtils {
     }
 
     fun getValidModelIdFromName(instance: ModelDownloadManager, modelName: String): String? {
+        // First try to find the exact model with the modelName (could be community model)
         listOf(
             ModelSources.sourceModelers,
             ModelSources.sourceHuffingFace,
             ModelSources.sourceModelScope
         ).forEach { source ->
-            val modelId = if (source == ModelSources.sourceHuffingFace)
-                "$source/taobao-mnn/$modelName" else "$source/MNN/$modelName"
-            val downloadFile = instance.getDownloadedFile(modelId)
-            Log.d(TAG, "getValidModelIdFromName: modelId: $modelId downloadFile: ${downloadFile} exists: ${downloadFile?.exists()}")
-            if (instance.getDownloadedFile(modelId) != null) {
-                return modelId
+            // Try both community model format and taobao-mnn format
+            val formats = if (source == ModelSources.sourceHuffingFace) {
+                listOf(
+                    "$source/$modelName",           // Community model format
+                    "$source/taobao-mnn/$modelName" // Official taobao-mnn format
+                )
+            } else {
+                listOf("$source/MNN/$modelName")
+            }
+            
+            for (modelId in formats) {
+                val downloadFile = instance.getDownloadedFile(modelId)
+                Log.d(TAG, "getValidModelIdFromName: modelId: $modelId downloadFile: ${downloadFile} exists: ${downloadFile?.exists()}")
+                if (instance.getDownloadedFile(modelId) != null) {
+                    return modelId
+                }
             }
         }
         return null
@@ -290,7 +301,7 @@ object ModelUtils {
     fun getModelSource(context: Context, modelId: String?): String? {
         return when {
             modelId == null -> null
-            modelId.startsWith("HuggingFace/") || modelId.contains("taobao-mnn") -> context.getString(R.string.huggingface)
+            modelId.startsWith("HuggingFace/") -> context.getString(R.string.huggingface)
             modelId.startsWith("ModelScope/") -> context.getString(R.string.modelscope)
             modelId.startsWith("Modelers/") -> context.getString(R.string.modelers)
             else -> null

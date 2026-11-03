@@ -166,7 +166,7 @@ internal object ModelListItemUiStateFactory {
     private fun getModelSource(context: Context, modelId: String?): String? {
         return when {
             modelId == null -> null
-            modelId.startsWith("HuggingFace/") || modelId.contains("taobao-mnn") ->
+            modelId.startsWith("HuggingFace/") ->
                 context.getString(R.string.huggingface)
             modelId.startsWith("ModelScope/") -> context.getString(R.string.modelscope)
             modelId.startsWith("Modelers/") -> context.getString(R.string.modelers)

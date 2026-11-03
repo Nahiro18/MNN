@@ -281,7 +281,8 @@ object ModelDeletionHelper {
                 .replace("HuggingFace_", "")
                 .replace("ModelScope_", "")
                 .replace("Modelers_", "")
-                .replace("MNN_", "taobao-mnn_")
+                // Only convert MNN_ to taobao-mnn_ if the model is from the taobao-mnn organization
+                .replace("MNN_", if (modelId.contains("taobao-mnn/")) "taobao-mnn_" else "")
             when {
                 subName == "modelers" -> safeName == baseName && modelId.startsWith("Modelers/")
                 subName == "modelscope" -> safeName == baseName && modelId.startsWith("ModelScope/")

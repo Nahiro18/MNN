@@ -1361,7 +1361,7 @@ object ModelListManager {
     private fun getSourceLabel(context: Context, modelId: String?, isLocal: Boolean): String? {
         if (modelId == null || modelId.isBlank() || modelId.startsWith("local/")) return null
         return when {
-            modelId.startsWith("HuggingFace/") || modelId.contains("taobao-mnn") -> context.getString(R.string.huggingface)
+            modelId.startsWith("HuggingFace/") -> context.getString(R.string.huggingface)
             modelId.startsWith("ModelScope/") -> context.getString(R.string.modelscope)
             modelId.startsWith("Modelers/") -> context.getString(R.string.modelers)
             modelId.startsWith("Builtin/") -> context.getString(R.string.builtin)
@@ -1396,7 +1396,17 @@ object ModelListManager {
             }
 
             !relativePath.contains("/") -> {
-                if (relativePath.isNotEmpty()) "HuggingFace/taobao-mnn/$relativePath" else null
+                if (relativePath.isNotEmpty()) {
+                    // Preserve the original path structure for community models
+                    // If it starts with "taobao-mnn_" convert to "taobao-mnn/" for backward compatibility
+                    // Otherwise treat as a community model path
+                    val normalizedPath = if (relativePath.startsWith("taobao-mnn_")) {
+                        relativePath.replace("taobao-mnn_", "taobao-mnn/")
+                    } else {
+                        relativePath
+                    }
+                    "HuggingFace/$normalizedPath"
+                } else null
             }
 
             else -> null

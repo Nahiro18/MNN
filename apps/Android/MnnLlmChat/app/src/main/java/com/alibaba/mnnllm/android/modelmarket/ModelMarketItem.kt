@@ -25,8 +25,7 @@ data class ModelMarketItem(
     /** True when this item was discovered live from the HuggingFace community search. */
     val isHuggingFaceCommunity: Boolean
         get() = modelId.startsWith("HuggingFace/") &&
-            currentRepoPath.isNotEmpty() &&
-            !currentRepoPath.startsWith("taobao-mnn/")
+            currentRepoPath.isNotEmpty()
 }
 
 data class ModelMarketItemWrapper(
