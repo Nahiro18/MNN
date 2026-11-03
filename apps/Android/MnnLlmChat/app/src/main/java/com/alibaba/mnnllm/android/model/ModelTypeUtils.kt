@@ -74,6 +74,11 @@ object ModelTypeUtils {
         return isVisualModelByTags(tags) || modelId.lowercase(Locale.getDefault()).contains("vl")
     }
 
+    fun isAudioModelByTagsOrId(modelId: String): Boolean {
+        val tags = ModelListManager.getModelTags(modelId)
+        return isAudioModelByTags(tags) || modelId.lowercase(Locale.getDefault()).contains("audio") || isOmni(modelId)
+    }
+
     fun isOpenClWarningByExtraTags(extraTags: List<String>): Boolean {
         return extraTags.any {
             it.equals("opencl_warning", ignoreCase = true) ||
