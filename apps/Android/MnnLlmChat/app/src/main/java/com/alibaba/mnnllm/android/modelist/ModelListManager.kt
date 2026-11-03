@@ -1253,6 +1253,12 @@ object ModelListManager {
             return null
         }
 
+        val normalizedModelId = normalizeKey(modelId)
+        val exactMatch = allMarketItems.firstOrNull { normalizeKey(it.modelId) == normalizedModelId }
+        if (exactMatch != null) {
+            return exactMatch
+        }
+
         val expectedSuffix = normalizeKey(modelId.substringAfterLast('/'))
         if (expectedSuffix.isNotEmpty()) {
             val bySuffix = allMarketItems.firstOrNull {
