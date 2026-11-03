@@ -108,14 +108,30 @@ jobs:
           ls -l ~/.android ~/.config/.android
 
       # ------------------------------------------------------------------
+      # Install Android SDK command-line tools (required for sdkmanager).
+      # The ubuntu-24.04 runner does not have them pre-installed.
+      # ------------------------------------------------------------------
+      - name: Install Android SDK command-line tools
+        run: |
+          sudo mkdir -p "$ANDROID_SDK_ROOT/cmdline-tools"
+          cd "$ANDROID_SDK_ROOT/cmdline-tools"
+          sudo wget -q https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -O cmdline-tools.zip
+          sudo unzip -q cmdline-tools.zip
+          sudo mv cmdline-tools latest
+          sudo rm cmdline-tools.zip
+          sudo chown -R "$USER":"$(id -gn)" "$ANDROID_SDK_ROOT"
+          echo "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
+          echo "$ANDROID_SDK_ROOT/platform-tools" >> "$GITHUB_PATH"
+
+      # ------------------------------------------------------------------
       # Manual SDK component install: licenses + ONLY NDK 27.2.12479018
       # and CMake 3.22.1, then export ANDROID_NDK / ANDROID_SDK_ROOT.
       # ------------------------------------------------------------------
       - name: Install Android NDK and CMake
         run: |
           export PATH="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin:$ANDROID_SDK_ROOT/platform-tools:$PATH"
-          yes | sudo sdkmanager --licenses > /dev/null || true
-          sudo sdkmanager --install "ndk;27.2.12479018" "cmake;3.22.1"
+          yes | sdkmanager --licenses > /dev/null || true
+          sdkmanager --install "ndk;27.2.12479018" "cmake;3.22.1"
           # Re-assert ownership of ~/.android in case sdkmanager touched it.
           sudo chown -R "$USER":"$(id -gn)" ~/.android || true
           echo "ANDROID_NDK=$ANDROID_SDK_ROOT/ndk/27.2.12479018" >> "$GITHUB_ENV"
