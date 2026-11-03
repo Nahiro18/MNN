@@ -68,8 +68,21 @@ class ModelMarketViewModel(application: Application) : AndroidViewModel(applicat
             it.downloadInfo = downloadInfo
         }
         allModels = currentList
+
+        hfSearchResults = hfSearchResults.map { wrapper ->
+            if (wrapper.modelMarketItem.modelId == modelId) {
+                wrapper.copy().also { it.downloadInfo = downloadInfo }
+            } else {
+                wrapper
+            }
+        }
         // Re-apply current filter state instead of showing all models
         applyCurrentFilters()
+    }
+
+    private fun findModelWrapper(modelId: String): ModelMarketItemWrapper? {
+        return allModels.find { it.modelMarketItem.modelId == modelId }
+            ?: hfSearchResults.find { it.modelMarketItem.modelId == modelId }
     }
     
     private fun applyCurrentFilters() {
@@ -235,10 +248,14 @@ class ModelMarketViewModel(application: Application) : AndroidViewModel(applicat
     }
 
     private fun resolveModelName(modelId: String): String? {
-        return allModels.firstOrNull { it.modelMarketItem.modelId == modelId }?.modelMarketItem?.modelName
+        return findModelWrapper(modelId)?.modelMarketItem?.modelName
     }
 
     fun startDownload(item: ModelMarketItem) {
+        // Persist capabilities (tags/extra tags) before the transfer starts. Community models
+        // come from the HuggingFace search and are not part of allModels, so waiting for the
+        // download-finished callback used to lose their Think/Vision/Audio metadata.
+        ModelMarketCache.writeMarketConfig(item)
         downloadManager.startDownload(item.modelId)
     }
 
@@ -257,6 +274,7 @@ class ModelMarketViewModel(application: Application) : AndroidViewModel(applicat
     }
 
     fun updateModel(item: ModelMarketItem) {
+        ModelMarketCache.writeMarketConfig(item)
         downloadManager.startDownload(item.modelId)
     }
 
@@ -311,14 +329,14 @@ class ModelMarketViewModel(application: Application) : AndroidViewModel(applicat
     // DownloadListener implementation - reusing logic from ModelListPresenter
     override fun onDownloadTotalSize(modelId: String, totalSize: Long) {
         mainHandler.post {
-            allModels.find { it.modelMarketItem.modelId == modelId }?.let { updateDownloadInfo(modelId, downloadManager.getDownloadInfo(it.modelMarketItem.modelId)) }
+            findModelWrapper(modelId)?.let { updateDownloadInfo(modelId, downloadManager.getDownloadInfo(it.modelMarketItem.modelId)) }
             _itemUpdate.value = modelId
         }
     }
 
     override fun onDownloadHasUpdate(modelId: String, downloadInfo: DownloadInfo) {
         mainHandler.post {
-            allModels.find { it.modelMarketItem.modelId == modelId }?.let { updateDownloadInfo(modelId, downloadInfo) }
+            findModelWrapper(modelId)?.let { updateDownloadInfo(modelId, downloadInfo) }
             _itemUpdate.value = modelId
         }
     }
@@ -327,7 +345,7 @@ class ModelMarketViewModel(application: Application) : AndroidViewModel(applicat
         lastDownloadProgressStage.remove(modelId)
         lastUpdateTimeMap.remove(modelId)
         mainHandler.post {
-            allModels.find { it.modelMarketItem.modelId == modelId }?.let { updateDownloadInfo(modelId, downloadManager.getDownloadInfo(it.modelMarketItem.modelId)) }
+            findModelWrapper(modelId)?.let { updateDownloadInfo(modelId, downloadManager.getDownloadInfo(it.modelMarketItem.modelId)) }
             _itemUpdate.value = modelId
             DownloadForegroundServiceManager.onDownloadStateChanged(
                 modelId = modelId,
@@ -340,7 +358,7 @@ class ModelMarketViewModel(application: Application) : AndroidViewModel(applicat
     override fun onDownloadFailed(modelId: String, e: Exception) {
         Log.d(TAG, "[onDownloadFailed] Received for modelId: $modelId, error: ${e.message}")
         mainHandler.post {
-            val wrapper = allModels.find { it.modelMarketItem.modelId == modelId }
+            val wrapper = findModelWrapper(modelId)
             if (wrapper != null) {
                 Log.d(TAG, "[onDownloadFailed] Found wrapper for $modelId. Updating info.")
                 updateDownloadInfo(modelId, downloadManager.getDownloadInfo(wrapper.modelMarketItem.modelId))
@@ -378,7 +396,7 @@ class ModelMarketViewModel(application: Application) : AndroidViewModel(applicat
             // Force a full item update if the progress stage changes (e.g., from nothing to "Preparing")
             // to ensure the UI state (like failed -> downloading) is refreshed correctly.
             if (progressStateChanged) {
-                allModels.find { it.modelMarketItem.modelId == modelId }?.let { updateDownloadInfo(modelId, downloadInfo) }
+                findModelWrapper(modelId)?.let { updateDownloadInfo(modelId, downloadInfo) }
                 _itemUpdate.value = modelId
             } else {
                 // Just update progress without full refresh
@@ -396,7 +414,7 @@ class ModelMarketViewModel(application: Application) : AndroidViewModel(applicat
     override fun onDownloadFinished(modelId: String, path: String) {
         recordModelTypeIfNeeded(modelId, path)
         mainHandler.post {
-            allModels.find { it.modelMarketItem.modelId == modelId }?.let { wrapper ->
+            findModelWrapper(modelId)?.let { wrapper ->
                 updateDownloadInfo(modelId, downloadManager.getDownloadInfo(wrapper.modelMarketItem.modelId))
                 ModelMarketCache.writeMarketConfig(wrapper.modelMarketItem)
             }
@@ -444,7 +462,7 @@ class ModelMarketViewModel(application: Application) : AndroidViewModel(applicat
 
     override fun onDownloadPaused(modelId: String) {
         mainHandler.post {
-            allModels.find { it.modelMarketItem.modelId == modelId }?.let { updateDownloadInfo(modelId, downloadManager.getDownloadInfo(it.modelMarketItem.modelId)) }
+            findModelWrapper(modelId)?.let { updateDownloadInfo(modelId, downloadManager.getDownloadInfo(it.modelMarketItem.modelId)) }
             _itemUpdate.value = modelId
             DownloadForegroundServiceManager.onDownloadStateChanged(
                 modelId = modelId,
@@ -456,7 +474,7 @@ class ModelMarketViewModel(application: Application) : AndroidViewModel(applicat
 
     override fun onDownloadFileRemoved(modelId: String) {
         mainHandler.post {
-            allModels.find { it.modelMarketItem.modelId == modelId }?.let { updateDownloadInfo(modelId, downloadManager.getDownloadInfo(it.modelMarketItem.modelId)) }
+            findModelWrapper(modelId)?.let { updateDownloadInfo(modelId, downloadManager.getDownloadInfo(it.modelMarketItem.modelId)) }
             _itemUpdate.value = modelId
             DownloadForegroundServiceManager.onDownloadStateChanged(
                 modelId = modelId,

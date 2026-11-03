@@ -8,6 +8,11 @@ import com.alibaba.mls.api.download.hf.HfModelDownloader
 import com.alibaba.mls.api.download.ms.MsModelDownloader
 import com.alibaba.mls.api.download.DownloadCoroutineManager
 import com.alibaba.mls.api.download.DownloadPersistentData
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import java.io.File
 
 /**
@@ -255,14 +260,11 @@ class ModelDownloadManager(context: Context) : ModelRepoDownloader.ModelRepoDown
         info.progress = 1.0
         info.hasUpdate = false
         DownloadPersistentData.saveDownloadedTime(ApplicationProvider.get(), modelId, System.currentTimeMillis())
-        
-        // Save total size to persistent data for future retrievals
-        if (info.totalSize > 0) {
-            DownloadPersistentData.saveDownloadSizeTotal(ApplicationProvider.get(), modelId, info.totalSize)
-        }
-        if (info.savedSize > 0) {
-            DownloadPersistentData.saveDownloadSizeSaved(ApplicationProvider.get(), modelId, info.savedSize)
-        }
+
+        // Persist the final sizes through the same async pipeline as the progress updates.
+        // Writing synchronously here could be overtaken by an older queued write and made
+        // the model look incomplete again on the next launch.
+        persistProgressIfNeeded(modelId, "Finished", info.savedSize, info.totalSize, force = true)
         persistTrackers.remove(modelId)
 
         downloadListeners.forEach { it.onDownloadFinished(modelId, absolutePath) }
@@ -280,6 +282,11 @@ class ModelDownloadManager(context: Context) : ModelRepoDownloader.ModelRepoDown
     )
     private val persistTrackers = java.util.concurrent.ConcurrentHashMap<String, PersistTracker>()
 
+    private data class PendingProgress(val total: Long, val saved: Long)
+    private val pendingProgress = java.util.concurrent.ConcurrentHashMap<String, PendingProgress>()
+    private val persistJobs = java.util.concurrent.ConcurrentHashMap<String, Job>()
+    private val persistScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+
     private fun persistProgressIfNeeded(modelId: String, stage: String, saved: Long, total: Long, force: Boolean = false) {
         if (saved <= 0 && total <= 0 && !force) return
         val now = System.currentTimeMillis()
@@ -288,15 +295,42 @@ class ModelDownloadManager(context: Context) : ModelRepoDownloader.ModelRepoDown
         val bytesAdvanced = saved - tracker.lastPersistSavedBytes >= PERSIST_MIN_DELTA_BYTES
         val stageChanged = tracker.lastPersistStage != stage
         if (force || intervalElapsed || bytesAdvanced || stageChanged) {
-            if (total > 0) {
-                DownloadPersistentData.saveDownloadSizeTotal(ApplicationProvider.get(), modelId, total)
-            }
-            if (saved > 0) {
-                DownloadPersistentData.saveDownloadSizeSaved(ApplicationProvider.get(), modelId, saved)
-            }
             tracker.lastPersistTimeMs = now
             tracker.lastPersistSavedBytes = saved
             tracker.lastPersistStage = stage
+
+            // Never fsync on the download thread: a DataStore edit can take tens of
+            // milliseconds and used to cap fast connections at a few hundred KB/s.
+            pendingProgress[modelId] = PendingProgress(total, saved)
+            scheduleProgressPersistence(modelId)
+        }
+    }
+
+    private fun scheduleProgressPersistence(modelId: String) {
+        if (persistJobs[modelId]?.isActive == true) {
+            return
+        }
+        persistJobs[modelId] = persistScope.launch {
+            try {
+                while (true) {
+                    val pending = pendingProgress.remove(modelId) ?: break
+                    DownloadPersistentData.saveDownloadProgressSuspend(
+                        ApplicationProvider.get(),
+                        modelId,
+                        pending.total,
+                        pending.saved
+                    )
+                }
+            } catch (e: Exception) {
+                // Progress persistence is best effort; the transfer itself must continue.
+            } finally {
+                persistJobs.remove(modelId, coroutineContext[Job])
+                // A progress update may have arrived while this job was finishing. Without
+                // this check that final value would never be written.
+                if (pendingProgress.containsKey(modelId)) {
+                    scheduleProgressPersistence(modelId)
+                }
+            }
         }
     }
 
@@ -415,8 +449,8 @@ class ModelDownloadManager(context: Context) : ModelRepoDownloader.ModelRepoDown
 
     companion object {
         const val REQUEST_CODE_POST_NOTIFICATIONS = 1001  // Stub constant for foreground service notifications
-        private const val PERSIST_INTERVAL_MS = 1000L
-        private const val PERSIST_MIN_DELTA_BYTES = 1024L * 1024L
+        private const val PERSIST_INTERVAL_MS = 2000L
+        private const val PERSIST_MIN_DELTA_BYTES = 4L * 1024L * 1024L
         @Volatile
         private var progressCallbackIntervalMs: Long = 0L
 

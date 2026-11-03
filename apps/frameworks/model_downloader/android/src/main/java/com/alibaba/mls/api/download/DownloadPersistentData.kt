@@ -85,6 +85,25 @@ object DownloadPersistentData {
     fun saveDownloadSizeSaved(context: Context, modelId: String, saved: Long) {
         runBlocking { saveDownloadSizeSavedSuspend(context, modelId, saved) }
     }
+
+    /**
+     * Persist total and saved size in a single DataStore transaction. The download loop used to
+     * call saveDownloadSizeTotal() + saveDownloadSizeSaved() for every few chunks, which meant
+     * two blocking fsyncs per second and visibly throttled fast connections.
+     */
+    suspend fun saveDownloadProgressSuspend(context: Context, modelId: String, total: Long, saved: Long) {
+        val normalizedModelId = getLastFileName(modelId)
+        val totalKey = createSizeTotalKey(normalizedModelId)
+        val savedKey = createSizeSavedKey(ModelIdUtils.safeModelId(modelId))
+        context.downloadDataStore.edit { preferences ->
+            if (total > 0) {
+                preferences[totalKey] = total
+            }
+            if (saved > 0) {
+                preferences[savedKey] = saved
+            }
+        }
+    }
     
     suspend fun saveDownloadSizeSavedSuspend(context: Context, modelId: String, saved: Long) {
         val newModelId = ModelIdUtils.safeModelId(modelId)

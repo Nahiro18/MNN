@@ -224,6 +224,12 @@ object ModelMarketCache {
             if (mnnModelsDir.exists()) {
                 scanForLocalConfigs(mnnModelsDir)
             }
+
+            // Market configs saved by previous downloads live under files/configs/<safeModelId>.
+            val modelConfigsDir = File(context.filesDir, "configs")
+            if (modelConfigsDir.exists()) {
+                scanForLocalConfigs(modelConfigsDir)
+            }
         } catch (e: Exception) {
             Timber.w(e, "Failed to load local and builtin models")
         }
@@ -390,26 +396,33 @@ object ModelMarketCache {
      */
     suspend fun readMarketConfigFromLocal(modelId: String): ModelMarketItem? {
         return withContext(Dispatchers.IO) {
-            val marketConfigFile = ModelConfig.getMarketConfigFile(modelId)
-            Timber.d("readMarketConfigFromLocal for $modelId: looking for file at $marketConfigFile")
-            var marketItem: ModelMarketItem? = null
-            try {
-                val configFile = File(marketConfigFile)
-                Timber.d("Config file exists: ${configFile.exists()}")
-                if (configFile.exists()) {
-                    val configJson = configFile.readText()
-                    Timber.d("Config file content: $configJson")
-                    marketItem = Gson().fromJson(configJson, ModelMarketItem::class.java)
-                    
-                    // If successfully read, update memory cache as well
-                    if (marketItem != null) {
-                        marketItemsCache[modelId] = marketItem
-                    }
-                }
-            } catch (e: Exception) {
-                Timber.w(e, "Failed to load market config for ${modelId}")
+            readMarketConfigFromLocalSync(modelId)
+        }
+    }
+
+    /**
+     * Synchronous variant used by lightweight metadata lookups. Results are cached in
+     * [marketItemsCache] so repeated calls never touch the disk again.
+     */
+    fun readMarketConfigFromLocalSync(modelId: String): ModelMarketItem? {
+        marketItemsCache[modelId]?.let { cached ->
+            if (cached.tags.isNotEmpty() || cached.extraTags.isNotEmpty()) {
+                return cached
             }
-            marketItem
+        }
+        return try {
+            val marketConfigFile = ModelConfig.getMarketConfigFile(modelId)
+            val configFile = File(marketConfigFile)
+            if (!configFile.exists()) {
+                null
+            } else {
+                Gson().fromJson(configFile.readText(), ModelMarketItem::class.java)?.also {
+                    marketItemsCache[modelId] = it
+                }
+            }
+        } catch (e: Exception) {
+            Timber.w(e, "Failed to load market config for $modelId")
+            null
         }
     }
     

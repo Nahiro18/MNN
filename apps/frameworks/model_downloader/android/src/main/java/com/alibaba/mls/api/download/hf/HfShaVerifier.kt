@@ -33,7 +33,7 @@ object HfShaVerifier {
         val size = Files.size(file)
         md.update("blob $size\u0000".toByteArray(StandardCharsets.UTF_8))
         Files.newInputStream(file).use { input ->
-            val buf = ByteArray(8192)
+            val buf = ByteArray(64 * 1024)
             var n: Int
             while (input.read(buf).also { n = it } > 0) {
                 md.update(buf, 0, n)
@@ -47,7 +47,7 @@ object HfShaVerifier {
         val md = MessageDigest.getInstance(algo)
         Files.newInputStream(file).use { `in` ->
             DigestInputStream(`in`, md).use { dis ->
-                val buf = ByteArray(8192)
+                val buf = ByteArray(64 * 1024)
                 while (dis.read(buf) != -1) { }
             }
         }

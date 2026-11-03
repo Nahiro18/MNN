@@ -7,9 +7,10 @@ import com.alibaba.mnnllm.android.modelist.ModelListManager
 
 object ModelTypeUtils {
 
+    private val VL_TOKEN = Regex("(^|[^a-z0-9])vl([^a-z0-9]|$)")
+
     fun isAudioModel(modelId: String): Boolean {
-        return modelId.lowercase(Locale.getDefault()).contains("audio") || isOmni(modelId)
-                || ModelListManager.isAudioModel(modelId)
+        return isAudioModelByTagsOrId(modelId)
     }
 
     fun isMultiModalModel(modelName: String): Boolean {
@@ -42,13 +43,11 @@ object ModelTypeUtils {
     }
 
     fun isVisualModel(modelId: String): Boolean {
-        return modelId.lowercase(Locale.getDefault()).contains("vl") || isOmni(modelId) ||
-                ModelListManager.isVisualModel(modelId) || isSanaModel(modelId)
+        return isVisualModelByTagsOrId(modelId) || isSanaModel(modelId)
     }
 
     fun isVideoModel(modelId: String): Boolean {
-        return modelId.lowercase(Locale.getDefault()).contains("video") ||
-                ModelListManager.isVideoModel(modelId)
+        return isVideoModelByTagsOrId(modelId)
     }
 
     fun isR1Model(modelName: String): Boolean {
@@ -66,17 +65,40 @@ object ModelTypeUtils {
     fun isThinkingModel(modelId: String): Boolean {
         val tags = ModelListManager.getModelTags(modelId)
         val extraTags = ModelListManager.getExtraTags(modelId)
-        return isThinkingModelByTags(tags) || isSupportThinkingSwitchByTags(extraTags)
+        return isThinkingModelByTags(tags) ||
+            isSupportThinkingSwitchByTags(extraTags) ||
+            matchesThinkingName(modelId)
     }
 
     fun isVisualModelByTagsOrId(modelId: String): Boolean {
-        val tags = ModelListManager.getModelTags(modelId)
-        return isVisualModelByTags(tags) || modelId.lowercase(Locale.getDefault()).contains("vl")
+        if (isVisualModelByTags(ModelListManager.getModelTags(modelId))) return true
+        val normalized = modelId.lowercase(Locale.getDefault())
+        if (VL_TOKEN.containsMatchIn(normalized)) return true
+        return listOf(
+            "vision", "visual", "multimodal", "omni", "llava", "fastvlm", "minicpm-v",
+            "lfm2-vl", "docling", "image-gen", "text-to-image"
+        ).any { normalized.contains(it) }
     }
 
     fun isAudioModelByTagsOrId(modelId: String): Boolean {
-        val tags = ModelListManager.getModelTags(modelId)
-        return isAudioModelByTags(tags) || modelId.lowercase(Locale.getDefault()).contains("audio") || isOmni(modelId)
+        if (isAudioModelByTags(ModelListManager.getModelTags(modelId))) return true
+        val normalized = modelId.lowercase(Locale.getDefault())
+        return listOf(
+            "audio", "speech", "voice", "whisper", "tts", "asr", "omni", "talker",
+            "zipformer", "bert-vits"
+        ).any { normalized.contains(it) }
+    }
+
+    fun isVideoModelByTagsOrId(modelId: String): Boolean {
+        if (isVideoModelByTags(ModelListManager.getModelTags(modelId))) return true
+        return modelId.lowercase(Locale.getDefault()).contains("video")
+    }
+
+    fun matchesThinkingName(modelId: String): Boolean {
+        val normalized = modelId.lowercase(Locale.getDefault())
+        return listOf(
+            "think", "reason", "deepseek-r1", "qwq", "vibethinker", "magistral", "gpt-oss"
+        ).any { normalized.contains(it) }
     }
 
     fun isOpenClWarningByExtraTags(extraTags: List<String>): Boolean {

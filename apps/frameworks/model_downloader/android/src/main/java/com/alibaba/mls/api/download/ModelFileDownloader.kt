@@ -18,6 +18,9 @@ import java.util.concurrent.TimeUnit
 class ModelFileDownloader {
     private val client: OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(30, TimeUnit.SECONDS)
+        .readTimeout(60, TimeUnit.SECONDS)
+        .writeTimeout(60, TimeUnit.SECONDS)
+        .retryOnConnectionFailure(true)
         .followRedirects(false)
         .followSslRedirects(false) //                .addInterceptor(OkHttpUtils.createLoggingInterceptor())
         .build()
@@ -177,57 +180,79 @@ class ModelFileDownloader {
         displayedFilename: String?,
         fileDownloadListener: FileDownloadListener?
     ) {
+        val resumeOffset = fileDownloadTask.downloadedSize
+        if (resumeOffset >= expectedSize) {
+            return
+        }
         val requestBuilder = Request.Builder()
             .url(url)
             .get()
             .header("Accept-Encoding", "identity")
-        if (fileDownloadTask.downloadedSize >= expectedSize) {
-            return
+            .header("User-Agent", "MNN-LLM-Android")
+        if (resumeOffset > 0) {
+            requestBuilder.header("Range", "bytes=$resumeOffset-")
         }
-        var downloadedBytes = fileDownloadTask.downloadedSize
-
-        if (fileDownloadTask.downloadedSize > 0) {
-            requestBuilder.header("Range", "bytes=" + fileDownloadTask.downloadedSize + "-")
-        }
-        Log.d(
-            TAG,
-            "resume size: " + fileDownloadTask.downloadedSize + " expectedSize: " + expectedSize
-        )
+        Log.d(TAG, "resume size: $resumeOffset expectedSize: $expectedSize")
         val request: Request = requestBuilder.build()
         try {
             client.newCall(request).execute().use { response ->
                 Log.d(
                     TAG,
-                    "downloadChunk response: success: " + response.isSuccessful + " code: " + response.code
+                    "downloadChunk response: success: ${response.isSuccessful} code: ${response.code}"
                 )
-                if (response.isSuccessful || response.code == 416) {
-                    response.body!!
-                        .byteStream().use { `is` ->
-                            RandomAccessFile(tempFile, "rw").use { raf ->
-                                raf.seek(fileDownloadTask.downloadedSize)
-                                val buffer = ByteArray(8192)
-                                var bytesRead: Int
-                                while ((`is`.read(buffer).also { bytesRead = it }) != -1) {
-                                    raf.write(buffer, 0, bytesRead)
-                                    downloadedBytes += bytesRead.toLong()
-                                    fileDownloadTask.downloadedSize += bytesRead.toLong()
-                                    if (fileDownloadListener != null) {
-                                        val paused = fileDownloadListener.onDownloadDelta(
-                                            displayedFilename,
-                                            downloadedBytes,
-                                            expectedSize,
-                                            bytesRead.toLong()
-                                        )
-                                        if (paused) {
-                                            throw DownloadPausedException("Download paused")
-                                        }
-                                    }
+                if (response.code == 416) {
+                    // Already complete (or the server disagrees about the range). Let the
+                    // caller validate the file instead of writing an error page into it.
+                    if (expectedSize > 0 && resumeOffset >= expectedSize) {
+                        return
+                    }
+                    throw FileDownloadException("HTTP 416 while resuming at $resumeOffset")
+                }
+                if (!response.isSuccessful) {
+                    Log.e(TAG, "downloadChunk error HfApiException " + response.code)
+                    throw FileDownloadException("HTTP error: ${response.code}")
+                }
+
+                // A server that ignores the Range header answers with 200 and the whole file.
+                // Writing that stream at resumeOffset would corrupt the model, so restart.
+                var writeOffset = resumeOffset
+                if (resumeOffset > 0 && response.code != 206) {
+                    Log.w(TAG, "Server ignored Range for $displayedFilename, restarting file")
+                    fileDownloadListener?.onDownloadDelta(
+                        displayedFilename,
+                        0,
+                        expectedSize,
+                        -resumeOffset
+                    )
+                    writeOffset = 0
+                }
+
+                response.body?.byteStream()?.use { input ->
+                    RandomAccessFile(tempFile, "rw").use { raf ->
+                        if (writeOffset == 0L) {
+                            raf.setLength(0)
+                        }
+                        raf.seek(writeOffset)
+                        val buffer = ByteArray(DOWNLOAD_BUFFER_SIZE)
+                        var bytesRead: Int
+                        while ((input.read(buffer).also { bytesRead = it }) != -1) {
+                            raf.write(buffer, 0, bytesRead)
+                            val delta = bytesRead.toLong()
+                            fileDownloadTask.downloadedSize = writeOffset + delta
+                            writeOffset += delta
+                            if (fileDownloadListener != null) {
+                                val paused = fileDownloadListener.onDownloadDelta(
+                                    displayedFilename,
+                                    writeOffset,
+                                    expectedSize,
+                                    delta
+                                )
+                                if (paused) {
+                                    throw DownloadPausedException("Download paused")
                                 }
                             }
                         }
-                } else {
-                    Log.e(TAG, "downloadChunk error HfApiException " + response.code)
-                    throw FileDownloadException("HTTP error: ${response.code}")
+                    }
                 }
             }
         } catch (e: IOException) {
@@ -265,5 +290,6 @@ class ModelFileDownloader {
 
     companion object {
         const val TAG: String = "ModelFileDownloader"
+        private const val DOWNLOAD_BUFFER_SIZE = 256 * 1024
     }
 }

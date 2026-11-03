@@ -20,14 +20,17 @@ import androidx.lifecycle.lifecycleScope
 import com.alibaba.mnnllm.android.R
 import com.alibaba.mnnllm.android.chat.ChatActivity
 import com.alibaba.mnnllm.android.utils.FileUtils
-import com.alibaba.mnnllm.android.model.ModelTypeUtils
+import com.alibaba.mnnllm.android.model.ModelCapabilities
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.IOException
 
-class AttachmentPickerModule(private val activity: ChatActivity) {
+class AttachmentPickerModule(
+    private val activity: ChatActivity,
+    private val capabilities: ModelCapabilities
+) {
     private val takePhotoView: View
     private val chooseImageView: View
     private val chooseVideoView: View
@@ -48,20 +51,26 @@ class AttachmentPickerModule(private val activity: ChatActivity) {
         takePhotoView = activity.findViewById(R.id.more_item_camera)
         chooseImageView = activity.findViewById(R.id.more_item_photo)
         chooseVideoView = activity.findViewById(R.id.more_item_video)
-        if (ModelTypeUtils.isVisualModel(activity.modelId!!)) {
+        // A new module can be created when the model changes, and the views may have been
+        // hidden by the previous module, so every capability also restores visibility.
+        if (capabilities.supportsVision) {
+            takePhotoView.visibility = View.VISIBLE
+            chooseImageView.visibility = View.VISIBLE
             takePhotoView.setOnClickListener { v: View? -> takePhoto() }
             chooseImageView.setOnClickListener { v: View? -> chooseImageView() }
         } else {
             takePhotoView.visibility = View.GONE
             chooseImageView.visibility = View.GONE
         }
-        if (ModelTypeUtils.isVideoModel(activity.modelId!!)) {
+        if (capabilities.supportsVideo) {
+            chooseVideoView.visibility = View.VISIBLE
             chooseVideoView.setOnClickListener { v: View? -> chooseVideo() }
         } else {
             chooseVideoView.visibility = View.GONE
         }
         val chooseAudioView = activity.findViewById<View>(R.id.more_item_audio)
-        if (ModelTypeUtils.isAudioModel(activity.modelId!!)) {
+        if (capabilities.supportsAudio) {
+            chooseAudioView.visibility = View.VISIBLE
             chooseAudioView.setOnClickListener { v: View? -> chooseAudio() }
         } else {
             chooseAudioView.visibility = View.GONE

@@ -457,15 +457,26 @@ object ModelListManager {
     fun getModelTags(modelId: String): List<String> {
         // First check memory map for immediate access
         val modelItem = modelIdModelMap[modelId]
-        if (modelItem != null) {
+        if (modelItem != null && modelItem.getTags().isNotEmpty()) {
             return modelItem.getTags()
         }
 
         // Never block callers (especially UI thread). Use current state snapshot only.
-        val successState = modelListState.value as? ModelListState.Success ?: return emptyList()
-        val wrapper = successState.models.find { it.modelItem.modelId == modelId }
-        if (wrapper != null) {
-            return wrapper.modelItem.getTags()
+        val successState = modelListState.value as? ModelListState.Success
+        if (successState != null) {
+            val wrapper = successState.models.find { it.modelItem.modelId == modelId }
+            if (wrapper != null && wrapper.modelItem.getTags().isNotEmpty()) {
+                return wrapper.modelItem.getTags()
+            }
+        }
+
+        // Models downloaded before the market metadata existed (or community models) may only
+        // have a persisted market_config.json. It is read once and cached in memory.
+        val cachedMarketItem = runCatching {
+            ModelMarketCache.readMarketConfigFromLocalSync(modelId)
+        }.getOrNull()
+        if (cachedMarketItem != null) {
+            return cachedMarketItem.tags
         }
 
         // Compensation: asynchronously warm up model list data for subsequent reads.
@@ -501,18 +512,31 @@ object ModelListManager {
      */
     fun getExtraTags(modelId: String): List<String> {
         val modelItem = modelIdModelMap[modelId]
-        if (modelItem == null) {
-            return emptyList()
+            ?: (modelListState.value as? ModelListState.Success)
+                ?.models
+                ?.firstOrNull { it.modelItem.modelId == modelId }
+                ?.modelItem
+
+        if (modelItem != null) {
+            // Prefer framework-provided extra tags when available.
+            val frameworkExtraTags = modelItem.getExtraTags()
+            if (frameworkExtraTags.isNotEmpty()) {
+                return frameworkExtraTags
+            }
+
+            // Fallback for local/legacy ModelItem implementations where getExtraTags() returns empty.
+            val marketExtraTags =
+                (modelItem.modelMarketItem as? ModelMarketItem)?.extraTags ?: emptyList()
+            if (marketExtraTags.isNotEmpty()) {
+                return marketExtraTags
+            }
         }
 
-        // Prefer framework-provided extra tags when available.
-        val frameworkExtraTags = modelItem.getExtraTags()
-        if (frameworkExtraTags.isNotEmpty()) {
-            return frameworkExtraTags
-        }
-
-        // Fallback for local/legacy ModelItem implementations where getExtraTags() returns empty.
-        return (modelItem.modelMarketItem as? ModelMarketItem)?.extraTags ?: emptyList()
+        // Last resort: read the market config that was persisted when the model was downloaded.
+        val cachedMarketItem = runCatching {
+            ModelMarketCache.readMarketConfigFromLocalSync(modelId)
+        }.getOrNull()
+        return cachedMarketItem?.extraTags ?: emptyList()
     }
 
     /**
@@ -1246,6 +1270,11 @@ object ModelListManager {
         val exact = ModelMarketCache.getModelFromCache(modelId)
         if (exact != null) {
             return exact
+        }
+
+        val persisted = ModelMarketCache.readMarketConfigFromLocal(modelId)
+        if (persisted != null) {
+            return persisted
         }
 
         val allMarketItems = ModelMarketCache.getAllCachedModels().values
