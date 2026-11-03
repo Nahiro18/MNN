@@ -109,11 +109,14 @@ object HuggingFaceMnnSearcher {
 
         val vendor = author ?: repoPath.substringBefore("/")
         val sizeB = estimateSizeBillions(name)
-        val hfTags = listOf("MNN") + (tags ?: emptyList())
+        val rawHfTags = (tags ?: emptyList())
             .filter { !it.startsWith("region:") && !it.equals("text-generation", true) }
             .map { it.substringAfterLast("/") }
             .distinct()
-            .take(6)
+        val capabilityTags = inferCapabilities(name, repoPath, rawHfTags)
+        val hfTags = listOf("MNN") + capabilityTags + rawHfTags.take(6 - capabilityTags.size)
+        val extraTags = mutableListOf<String>()
+        if (capabilityTags.contains("Think")) extraTags.add("ThinkingSwitch")
         val description = "MNN model from HuggingFace ($repoPath)" +
             (if (downloads != null && downloads > 0) " · ${downloads} downloads" else "")
 
@@ -126,6 +129,7 @@ object HuggingFaceMnnSearcher {
             sources = mapOf("HuggingFace" to repoPath),
             description = description,
             fileSize = 0L,
+            extraTags = extraTags,
         ).apply {
             currentSource = "HuggingFace"
             currentRepoPath = repoPath
@@ -141,5 +145,39 @@ object HuggingFaceMnnSearcher {
             "m" -> value / 1000.0
             else -> 0.0
         }
+    }
+
+    private fun inferCapabilities(name: String, repoPath: String, hfTags: List<String>): List<String> {
+        val haystack = (name + " " + repoPath + " " + hfTags.joinToString(" ")).lowercase()
+        val caps = mutableListOf<String>()
+        if (haystack.contains("vision") || haystack.contains("vl") || haystack.contains("visual") ||
+            haystack.contains("image") || haystack.contains("multimodal") || haystack.contains("mm-")) {
+            caps.add("Vision")
+        }
+        if (haystack.contains("think") || haystack.contains("reasoning") || haystack.contains("r1") ||
+            haystack.contains("qwq") || haystack.contains("deepseek-r1")) {
+            caps.add("Think")
+        }
+        if (haystack.contains("audio") || haystack.contains("speech") || haystack.contains("voice") ||
+            haystack.contains("omni") || haystack.contains("tts") || haystack.contains("asr")) {
+            caps.add("Audio")
+        }
+        if (haystack.contains("video")) {
+            caps.add("Video")
+        }
+        if (haystack.contains("code") || haystack.contains("coder")) {
+            caps.add("Code")
+        }
+        if (haystack.contains("math") || haystack.contains("math")) {
+            caps.add("Math")
+        }
+        if (haystack.contains("image-gen") || haystack.contains("diffusion") || haystack.contains("stable-diffusion") ||
+            haystack.contains("sana") || haystack.contains("text-to-image")) {
+            caps.add("ImageGen")
+        }
+        if (haystack.contains("audio-gen") || haystack.contains("music")) {
+            caps.add("AudioGen")
+        }
+        return caps.distinct()
     }
 }

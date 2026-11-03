@@ -394,12 +394,11 @@ class ModelMarketViewModel(application: Application) : AndroidViewModel(applicat
     }
 
     override fun onDownloadFinished(modelId: String, path: String) {
-        recordDiffusionModelTypeIfNeeded(modelId, path)
+        recordModelTypeIfNeeded(modelId, path)
         mainHandler.post {
-            allModels.find { it.modelMarketItem.modelId == modelId }?.let {
+            allModels.find { it.modelMarketItem.modelId == modelId }?.let { wrapper ->
                 updateDownloadInfo(modelId, downloadManager.getDownloadInfo(it.modelMarketItem.modelId))
-                // Note: Market config write is now handled automatically by ModelMarketCache
-                // which subscribes to ModelRepository changes
+                ModelMarketCache.writeMarketConfig(wrapper.modelMarketItem)
             }
             _itemUpdate.value = modelId
             DownloadForegroundServiceManager.onDownloadStateChanged(
@@ -410,10 +409,9 @@ class ModelMarketViewModel(application: Application) : AndroidViewModel(applicat
         }
     }
 
-    private fun recordDiffusionModelTypeIfNeeded(modelId: String, path: String) {
-        if (!ModelTypeUtils.isDiffusionModel(modelId)) {
-            return
-        }
+    private fun recordModelTypeIfNeeded(modelId: String, path: String) {
+        val modelType = resolveModelType(modelId)
+        if (modelType == "LLM") return
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 val resolvedPath = if (path.isNotBlank()) {
@@ -422,18 +420,26 @@ class ModelMarketViewModel(application: Application) : AndroidViewModel(applicat
                     downloadManager.getDownloadedFile(modelId)?.absolutePath.orEmpty()
                 }
                 if (resolvedPath.isBlank()) {
-                    Log.w(TAG, "Skip recording diffusion type for $modelId: empty model path")
+                    Log.w(TAG, "Skip recording type for $modelId: empty model path")
                     return@launch
                 }
                 ChatDataManager.getInstance(getApplication()).recordDownloadHistory(
                     modelId,
                     resolvedPath,
-                    "DIFFUSION"
+                    modelType
                 )
             } catch (e: Exception) {
-                Log.w(TAG, "Failed to record diffusion type for $modelId", e)
+                Log.w(TAG, "Failed to record type for $modelId", e)
             }
         }
+    }
+
+    private fun resolveModelType(modelId: String): String {
+        if (ModelTypeUtils.isDiffusionModel(modelId)) return "DIFFUSION"
+        if (ModelTypeUtils.isAudioModel(modelId)) return "AUDIO"
+        if (ModelTypeUtils.isVisualModel(modelId)) return "VISION"
+        if (ModelTypeUtils.isVideoModel(modelId)) return "VIDEO"
+        return "LLM"
     }
 
     override fun onDownloadPaused(modelId: String) {
