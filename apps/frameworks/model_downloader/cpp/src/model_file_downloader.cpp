@@ -145,28 +145,9 @@ namespace mnn::downloader
             fileDownloadTask.downloadedSize = 0;
         }
         
-        // Check for redirects first (like Android does)
-        auto [host, path] = HfApiClient::ParseUrl(urlToDownload);
-        httplib::Headers headers;
-        headers.emplace("User-Agent", "MNN-CLI/1.0");
-        headers.emplace("Accept", "*/*");
-        
-        // Add Hugging Face authentication token ONLY for huggingface.co requests
-        // DO NOT add Authorization header for pre-signed CDN URLs
-        if (host.find("huggingface.co") != std::string::npos) {
-            if (const char* hf_token = std::getenv("HF_TOKEN")) {
-                std::string auth_header = "Bearer " + std::string(hf_token);
-                headers.emplace("Authorization", auth_header);
-            }
-        }
-        
-        auto head_res = client_.Head(path, headers);
-        if (head_res && (head_res->status >= 301 && head_res->status <= 308)) {
-            std::string location = head_res->get_header_value("Location");
-            if (!location.empty()) {
-                theUrlToDownload = location;
-            }
-        }
+        // The urlToDownload is already the final CDN URL from metadata fetch (HfFileMetadataUtils follows redirects).
+        // No need for an extra HEAD request which causes an extra TLS handshake.
+        // Only follow redirects if the server returns one during the actual GET request.
         
         LOG_DEBUG_TAG("downloadToTmpAndMove urlToDownload: " + theUrlToDownload + " to file: " + incompletePath.string() + " to destination: " + destinationPath.string(), "ModelFileDownloader");
         
@@ -247,11 +228,13 @@ namespace mnn::downloader
         // Host header mismatch (e.g., "Host: example.com:443" vs "Host: example.com")
         httplib::SSLClient download_client(host);
         download_client.set_connection_timeout(kConnectTimeoutSeconds, 0);
-        download_client.set_read_timeout(kConnectTimeoutSeconds, 0);
-        download_client.set_write_timeout(kConnectTimeoutSeconds, 0);
+        // No read/write timeouts to avoid premature failures on slow connections
+        // (0 means infinite in httplib)
+        download_client.set_read_timeout(0, 0);
+        download_client.set_write_timeout(0, 0);
         download_client.enable_server_certificate_verification(false);
-        // For pre-signed URLs, we need minimal headers - disable keep-alive to avoid Connection header
-        download_client.set_keep_alive(false);
+        // Enable keep-alive for connection reuse (critical for download speed)
+        download_client.set_keep_alive(true);
         // Set empty user agent to avoid automatic User-Agent header
         download_client.set_default_headers({});
         

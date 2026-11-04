@@ -96,29 +96,9 @@ class ModelFileDownloader {
                 fileDownloadTask.downloadedSize = 0
             }
         }
-        val requestBuilder = Request.Builder()
-            .url(theUrlToDownload)
-            .get()
-        val request: Request = requestBuilder.build()
-        try {
-            client.newCall(request).execute().use { response ->
-                Log.d(TAG, "response code: " + response.code)
-                for (header in response.headers.names()) {
-                    Log.d(
-                        TAG,
-                        "downloadToTmpAndMove response header: $header: " + response.header(
-                            header
-                        )
-                    )
-                }
-                // Handle all redirect status codes (301, 302, 303, 307, 308)
-                if (response.code in 301..308) {
-                    theUrlToDownload = response.header("Location")!!
-                }
-            }
-        } catch (e: IOException) {
-            throw FileDownloadException("get header error" + e.message)
-        }
+        // The urlToDownload is already the final CDN URL from metadata fetch (HfFileMetadataUtils.getFileMetadata
+        // follows redirects). No need for an extra HEAD request which causes an extra TLS handshake.
+        // Only follow redirects if the server returns one during the actual GET request.
         Log.d(
             TAG,
             "downloadToTmpAndMove urlToDownload: $theUrlToDownload to file: $incompletePath to destination: $destinationPath"
